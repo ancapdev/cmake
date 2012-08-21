@@ -31,7 +31,7 @@ dependencies for each target such that no cycles are left and the
 build order is safe.
 
 For most target types cyclic dependencies are not allowed.  However
-STATIC libraries may depend on each other in a cyclic fashion.  In
+STATIC libraries may depend on each other in a cyclic fasion.  In
 general the directed dependency graph forms a directed-acyclic-graph
 of strongly connected components.  All strongly connected components
 should consist of only STATIC_LIBRARY targets.
@@ -201,21 +201,12 @@ void cmComputeTargetDepends::CollectTargetDepends(int depender_index)
   cmTarget* depender = this->Targets[depender_index];
 
   // Loop over all targets linked directly.
+  if (depender->GetType() != cmTarget::STATIC_LIBRARY)
   {
-  cmTarget::LinkLibraryVectorType const& tlibs =
-    depender->GetOriginalLinkLibraries();
-  std::set<cmStdString> emitted;
-  // A target should not depend on itself.
-  emitted.insert(depender->GetName());
-  for(cmTarget::LinkLibraryVectorType::const_iterator lib = tlibs.begin();
-      lib != tlibs.end(); ++lib)
-    {
-    // Don't emit the same library twice for this target.
-    if(emitted.insert(lib->first).second)
-      {
-      this->AddTargetDepend(depender_index, lib->first.c_str(), true);
-      }
-    }
+      std::set<cmStdString> emitted;
+      // A target should not depend on itself.
+      emitted.insert(depender->GetName());
+      this->CollectTargetLinkDepends(depender_index, depender->GetOriginalLinkLibraries(), emitted);
   }
 
   // Loop over all utility dependencies.
@@ -230,16 +221,32 @@ void cmComputeTargetDepends::CollectTargetDepends(int depender_index)
     // Don't emit the same utility twice for this target.
     if(emitted.insert(*util).second)
       {
-      this->AddTargetDepend(depender_index, util->c_str(), false);
+      this->AddTargetDepend(depender_index, util->c_str(), false, emitted);
       }
     }
   }
 }
 
+void cmComputeTargetDepends::CollectTargetLinkDepends(int depender_index,
+                                                      cmTarget::LinkLibraryVectorType const& tlibs,
+                                                      std::set<cmStdString>& emitted)
+{
+  for(cmTarget::LinkLibraryVectorType::const_iterator lib = tlibs.begin();
+      lib != tlibs.end(); ++lib)
+    {
+    // Don't emit the same library twice for this target.
+    if(emitted.insert(lib->first).second)
+      {
+      this->AddTargetDepend(depender_index, lib->first.c_str(), true, emitted);
+      }
+    }
+}
+
 //----------------------------------------------------------------------------
 void cmComputeTargetDepends::AddTargetDepend(int depender_index,
                                              const char* dependee_name,
-                                             bool linking)
+                                             bool linking,
+                                             std::set<cmStdString>& emitted)
 {
   // Get the depender.
   cmTarget* depender = this->Targets[depender_index];
@@ -260,14 +267,15 @@ void cmComputeTargetDepends::AddTargetDepend(int depender_index,
 
   if(dependee)
     {
-    this->AddTargetDepend(depender_index, dependee, linking);
+    this->AddTargetDepend(depender_index, dependee, linking, emitted);
     }
 }
 
 //----------------------------------------------------------------------------
 void cmComputeTargetDepends::AddTargetDepend(int depender_index,
                                              cmTarget* dependee,
-                                             bool linking)
+                                             bool linking,
+                                             std::set<cmStdString>& emitted)
 {
   if(dependee->IsImported())
     {
@@ -276,11 +284,9 @@ void cmComputeTargetDepends::AddTargetDepend(int depender_index,
     for(std::set<cmStdString>::const_iterator i = utils.begin();
         i != utils.end(); ++i)
       {
-      if(cmTarget* transitive_dependee =
-         dependee->GetMakefile()->FindTargetToUse(i->c_str()))
-        {
-        this->AddTargetDepend(depender_index, transitive_dependee, false);
-        }
+      cmTarget* transitive_dependee =
+        dependee->GetMakefile()->FindTargetToUse(i->c_str());
+      this->AddTargetDepend(depender_index, transitive_dependee, false, emitted);
       }
     }
   else
@@ -295,6 +301,10 @@ void cmComputeTargetDepends::AddTargetDepend(int depender_index,
     // Add this entry to the dependency graph.
     this->InitialGraph[depender_index].push_back(
       cmGraphEdge(dependee_index, !linking));
+
+    // Follow transitive link dependencies
+    if (dependee->GetType() == cmTarget::STATIC_LIBRARY)
+      this->CollectTargetLinkDepends(depender_index, dependee->GetOriginalLinkLibraries(), emitted);
     }
 }
 
